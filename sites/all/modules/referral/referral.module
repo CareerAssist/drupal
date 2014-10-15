@@ -1,0 +1,256 @@
+<?php
+
+define('DEFAULT_LOCATIONS', serialize (array('San_Francisco', 'Seattle', 'New_York')));
+define('DEFAULT_COMPANIES', serialize (array('Google', 'Facebook', 'LinkedIn', 'Amazon')));
+define('YEARS_OF_EXPERIENCE', serialize (array('unspecified', 'new grad', '< 2', '2 - 5', '> 5')));
+
+function referral_help($path, $arg) {
+}
+
+function referral_block_info() {
+  $blocks['demanding_form'] = array(
+    'info' => t('Referral demaning form'),
+  );
+  $blocks['opening_form'] = array(
+    'info' => t('Referral opening form'),
+  );
+  $blocks['available_openings'] = array(
+    'info' => t('Display available openings'),
+  );
+  $blocks['referral_requests'] = array(
+    'info' => t('Display referral requests'),
+  );
+
+  return $blocks;
+}
+
+function referral_block_view($delta = '') {
+  $block = array();
+  switch ($delta) {
+    case 'demanding_form':
+      $block['content'] = theme('referral_demanding_form', drupal_get_form('referral_demanding_form'));
+      break;
+    case 'opening_form':
+      $block['content'] = theme('referral_opening_form', drupal_get_form('referral_opening_form'));
+      break;
+    case 'available_openings':
+      $query = db_select('referral_opening', 'o');
+      $query->join('referral_opening_location', 'ol', 'o.id = ol.opening_id');
+      $query->join('referral_location', 'l', 'ol.location_id = l.id');
+      $query->join('referral_opening_company', 'oc', 'o.id = oc.opening_id');
+      $query->join('referral_company', 'c', 'oc.company_id = c.id');
+      $query->condition('o.job_area',  $_GET['job_area'])
+        ->condition('o.years_of_experience', $_GET['years_of_experience'])
+        ->condition('ol.location_id', $_GET['location_ids'], 'IN')
+        ->condition('oc.company_id', $_GET['company_ids'], 'IN')
+        ->fields('o', array('id', 'uid', 'job_area', 'years_of_experience'));
+      $query->addField('l', 'city');
+      $query->addField('c', 'company');
+      $result = $query->execute();
+      
+      $items = array();
+      foreach ($result as $opening) {
+        $items[] = array('data' => _compose_result($opening));
+      }
+      if (empty($items)) {
+        $block['content'] = 'There is no corresponding available opening yet.';
+      } else {
+        $block['content'] = theme('item_list', array('items' => $items));
+      }
+      break;
+    case 'referral_requests':
+      $query = db_select('referral_demanding', 'd');
+      $query->join('referral_demanding_location', 'dl', 'd.id = dl.demanding_id');
+      $query->join('referral_location', 'l', 'dl.location_id = l.id');
+      $query->join('referral_demanding_company', 'dc', 'd.id = dc.demanding_id');
+      $query->join('referral_company', 'c', 'dc.company_id = c.id');
+      $query->condition('d.job_area',  $_GET['job_area'])
+        ->condition('d.years_of_experience', $_GET['years_of_experience'])
+        ->condition('dl.location_id', $_GET['location_ids'], 'IN')
+        ->condition('dc.company_id', $_GET['company_ids'], 'IN')
+        ->fields('d', array('id', 'uid', 'job_area', 'years_of_experience'));
+      $query->addField('l', 'city');
+      $query->addField('c', 'company');
+      $result = $query->execute();
+      
+      $items = array();
+      foreach ($result as $request) {
+        $items[] = array('data' => _compose_result($request));
+      }
+      if (empty($items)) {
+        $block['content'] = 'There is no corresponding referral request yet.';
+      } else {
+        $block['content'] = theme('item_list', array('items' => $items));
+      }
+      break;
+  }
+  return $block;
+}
+
+function referral_theme($existing, $type, $theme, $path) {
+  $theme = array(
+    'referral_demanding_form' => array(
+      'render element' => 'form',
+      'template' => 'templates/referral-demanding-form',
+    ),
+    'referral_opening_form' => array(
+      'render element' => 'form',
+      'template' => 'templates/referral-demanding-form',
+    ),
+  );
+  return $theme;
+}
+
+function _compose_result($result) {
+  return t('[' . $result->id . '] User ID: ' . $result->uid . ', Job Area: ' . $result->job_area . ', Location: ' . $result->city . ', Company: ' . $result->company);
+}
+
+
+#### Forms ####
+
+# TODO: load mostly frequently used locations and companies
+function _form_helper($form, &$form_state) {
+  $form['job_area'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Job Area'),
+  );
+
+  $form['years_of_experience'] = array(
+    '#type' => 'select',
+    '#title' => t('Years of Experience'),
+    '#options' => drupal_map_assoc(unserialize(YEARS_OF_EXPERIENCE)),
+    '#default_value' => unserialize(YEARS_OF_EXPERIENCE)[0],
+  );
+  
+  $form['locations'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Locations'),
+    '#options' => drupal_map_assoc(unserialize(DEFAULT_LOCATIONS)),
+  );
+  
+  $form['companies'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Companies'),
+    '#options' => drupal_map_assoc(unserialize(DEFAULT_COMPANIES)),
+  );
+  
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+  );
+
+  return $form;
+}
+
+function _filter($l) { return $l !== 0; };
+
+function _compose_criteria($criteria) {
+  return t('Job Area: ' . $criteria['job_area'] . ', Years of Experience: ' . $criteria['years_of_experience']);
+}
+
+function referral_demanding_form($form, &$form_state) {
+  return _form_helper($form, $form_state);
+}
+
+function referral_demanding_form_submit($form, &$form_state) {
+  global $user;
+  
+  $did = db_insert('referral_demanding')
+     ->fields(array(
+       'uid' => $user->uid,
+       'job_area' => $form_state['values']['job_area'],
+       'years_of_experience' => array_search($form_state['values']['years_of_experience'], unserialize(YEARS_OF_EXPERIENCE)),
+     ))
+     ->execute();
+  
+  $locations = array_filter($form_state['values']['locations'], '_filter');
+  $location_ids = db_query('SELECT id FROM {referral_location} WHERE city in (:locations)', array(':locations' => $locations))->fetchCol();
+  foreach ($location_ids as $location_id) {
+    db_insert('referral_demanding_location')
+      ->fields(array(
+        'demanding_id' => $did,
+        'location_id' => $location_id,
+      ))
+      ->execute();
+  }
+  
+  $companies = array_filter($form_state['values']['companies'], '_filter');
+  $company_ids = db_query('SELECT id FROM {referral_company} WHERE company in (:companies)', array(':companies' => $companies))->fetchCol();
+  foreach ($company_ids as $company_id) {
+    db_insert('referral_demanding_company')
+      ->fields(array(
+        'demanding_id' => $did,
+        'company_id' => $company_id,
+      ))
+      ->execute();
+  }
+  
+  # gather criteria
+  $criteria = array();
+  $criteria['job_area'] = $form_state['values']['job_area'];
+  $criteria['years_of_experience'] = $form_state['values']['years_of_experience'];
+  $criteria['location_ids'] = $location_ids;
+  $criteria['company_ids'] = $company_ids;
+  drupal_set_message(t('[' . $did . '] Submitted. Thank you for using the referral system. <br/>' . _compose_criteria($criteria)));
+
+  # TODO: better node naming
+  $form_state['redirect'] = array(
+    'node/5',
+    array('query' => $criteria),
+  );
+}
+
+function referral_opening_form($form, &$form_state) {
+  return _form_helper($form, $form_state);
+}
+
+function referral_opening_form_submit($form, &$form_state) {
+  global $user;
+  
+  # store data into database
+  
+  $oid = db_insert('referral_opening')
+     ->fields(array(
+       'uid' => $user->uid,
+       'job_area' => $form_state['values']['job_area'],
+       'years_of_experience' => array_search($form_state['values']['years_of_experience'], unserialize(YEARS_OF_EXPERIENCE)),
+     ))
+     ->execute();
+  
+  $locations = array_filter($form_state['values']['locations'], '_filter');
+  $location_ids = db_query('SELECT id FROM {referral_location} WHERE city in (:locations)', array(':locations' => $locations))->fetchCol();
+  foreach ($location_ids as $location_id) {
+    db_insert('referral_opening_location')
+      ->fields(array(
+        'opening_id' => $oid,
+        'location_id' => $location_id,
+      ))
+      ->execute();
+  }
+  
+  $companies = array_filter($form_state['values']['companies'], '_filter');
+  $company_ids = db_query('SELECT id FROM {referral_company} WHERE company in (:companies)', array(':companies' => $companies))->fetchCol();
+  foreach ($company_ids as $company_id) {
+    db_insert('referral_opening_company')
+      ->fields(array(
+        'opening_id' => $oid,
+        'company_id' => $company_id,
+      ))
+      ->execute();
+  }
+
+  # gather criteria
+  $criteria = array();
+  $criteria['job_area'] = $form_state['values']['job_area'];
+  $criteria['years_of_experience'] = $form_state['values']['years_of_experience'];
+  $criteria['location_ids'] = $location_ids;
+  $criteria['company_ids'] = $company_ids;
+  drupal_set_message(t('[' . $oid . '] Submitted. Thank you for providing the information about available openings. <br/>' . _compose_criteria($criteria)));
+  
+  # TODO: better node naming
+  $form_state['redirect'] = array(
+    'node/7',
+    array('query' => $criteria),
+  );
+}
+

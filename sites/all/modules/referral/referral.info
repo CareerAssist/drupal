@@ -1,0 +1,3 @@
+name = Referral
+description = Make internal referrals.
+core = 7.x
